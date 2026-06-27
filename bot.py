@@ -827,23 +827,47 @@ def vk_article_post(random_product=False):
         attachment = photos[photo_idx]
 
         if VK_CHANNEL_PEER_ID:
-            # Публикуем в канал сообщества (подписчики получают в ЛС)
-            r = requests.post("https://api.vk.com/method/messages.send", data={
-                "peer_id":    VK_CHANNEL_PEER_ID,
-                "message":    post_text,
-                "attachment": attachment,
+            # Способ 1: wall.post на ID канала (канал — отдельная сущность ВК)
+            r = requests.post("https://api.vk.com/method/wall.post", data={
+                "owner_id":    VK_CHANNEL_PEER_ID,
+                "from_group":  1,
+                "message":     post_text,
+                "attachments": attachment,
                 "access_token": VK_TOKEN,
-                "random_id":  int(time.time()),
                 "v": "5.199"
             }, timeout=15)
             result = r.json()
+
             if "response" in result:
+                post_id = result["response"].get("post_id", "")
                 send(
-                    f"📰 Статья отправлена в канал ВК!\n"
+                    f"📰 Статья опубликована в канале ВК!\n"
                     f"Источник: {src_name or 'Claude'} | Бренд: {name}"
                 )
             else:
-                send(f"❌ Ошибка отправки в канал: {result.get('error', {}).get('error_msg', str(result))}")
+                err_msg = result.get("error", {}).get("error_msg", str(result))
+                # Способ 2: messages.send как запасной
+                r2 = requests.post("https://api.vk.com/method/messages.send", data={
+                    "peer_id":     VK_CHANNEL_PEER_ID,
+                    "message":     post_text,
+                    "attachment":  attachment,
+                    "group_id":    VK_GROUP_ID,
+                    "access_token": VK_TOKEN,
+                    "random_id":   int(time.time()),
+                    "v": "5.199"
+                }, timeout=15)
+                result2 = r2.json()
+                if "response" in result2:
+                    send(f"📰 Статья отправлена в канал ВК!\nИсточник: {src_name or 'Claude'} | Бренд: {name}")
+                else:
+                    err2 = result2.get("error", {}).get("error_msg", str(result2))
+                    send(
+                        f"❌ Оба способа не сработали:\n"
+                        f"wall.post: {err_msg}\n"
+                        f"messages.send: {err2}\n\n"
+                        f"Возможно нужно включить сообщения в настройках сообщества:\n"
+                        f"Управление → Разделы → Сообщения → Включить"
+                    )
         else:
             # Запасной вариант — стена сообщества
             r = requests.post("https://api.vk.com/method/wall.post", data={
