@@ -617,6 +617,245 @@ def cmd_vkpost():
     vk_daily_post(random_product=True)
 
 
+# ─── ВК СТАТЬЯ ───
+
+import xml.etree.ElementTree as ET
+import random as rnd
+
+BRAND_WIKI = {
+    "Armani Exchange":    "Armani",
+    "Hide & Jack":        "Hide_%26_Jack",
+    "Hugo BOSS":          "Hugo_Boss",
+    "Brunello Cucinelli": "Brunello_Cucinelli",
+    "Prada":              "Prada",
+}
+
+# RSS-источники: живые новости моды и кроссовок
+RSS_SOURCES = [
+    ("Hypebeast",     "https://hypebeast.com/feed"),
+    ("Sneaker News",  "https://sneakernews.com/feed/"),
+    ("Highsnobiety",  "https://www.highsnobiety.com/feed/"),
+    ("Footwear News", "https://footwearnews.com/feed/"),
+]
+
+HEADERS_RSS = {
+    "User-Agent": "Mozilla/5.0 (compatible; KickLuxeBot/1.0)"
+}
+
+
+def fetch_rss_item(brand_name):
+    """Ищет свежую новость о бренде или моде в RSS-лентах."""
+    search_terms = [brand_name.lower().split()[0], "sneaker", "luxury", "fashion", "style"]
+    rnd.shuffle(RSS_SOURCES)
+
+    for source_name, url in RSS_SOURCES:
+        try:
+            r = requests.get(url, headers=HEADERS_RSS, timeout=10)
+            if r.status_code != 200:
+                continue
+            root = ET.fromstring(r.content)
+            items = root.findall(".//item")
+            rnd.shuffle(items)
+
+            for item in items[:20]:
+                title = (item.findtext("title") or "").lower()
+                desc  = (item.findtext("description") or "")
+                # Убираем HTML-теги из описания
+                desc_clean = desc.replace("<p>", "").replace("</p>", " ")
+                for tag in ["<b>","</b>","<i>","</i>","<br/>","<br>"]:
+                    desc_clean = desc_clean.replace(tag, "")
+                text = (title + " " + desc_clean).lower()
+
+                if any(t in text for t in search_terms):
+                    raw_title = item.findtext("title") or ""
+                    return source_name, raw_title, desc_clean[:800]
+
+            # Если по бренду нет — берём любую свежую новость о моде/кроссовках
+            for item in items[:5]:
+                raw_title = item.findtext("title") or ""
+                desc  = (item.findtext("description") or "")[:800]
+                return source_name, raw_title, desc
+
+        except Exception as e:
+            print(f"RSS {source_name} error: {e}")
+            continue
+
+    return None, None, None
+
+
+def fetch_reddit_sneakers():
+    """Берёт горячие посты из r/Sneakers на Reddit (JSON API, без ключей)."""
+    try:
+        r = requests.get(
+            "https://www.reddit.com/r/Sneakers/hot.json?limit=10",
+            headers=HEADERS_RSS,
+            timeout=10
+        )
+        if r.status_code != 200:
+            return None, None
+        posts = r.json()["data"]["children"]
+        rnd.shuffle(posts)
+        for post in posts[:10]:
+            d = post["data"]
+            if not d.get("is_self") and d.get("score", 0) > 100:
+                return d.get("title", ""), d.get("selftext", "")[:600]
+    except Exception as e:
+        print(f"Reddit error: {e}")
+    return None, None
+
+
+def fetch_wiki_facts(brand_name):
+    """Факты о бренде из Википедии — запасной источник."""
+    wiki_name = BRAND_WIKI.get(brand_name, brand_name.replace(" ", "_"))
+    for lang in ("ru", "en"):
+        try:
+            r = requests.get(
+                f"https://{lang}.wikipedia.org/api/rest_v1/page/summary/{wiki_name}",
+                timeout=8
+            )
+            if r.status_code == 200:
+                extract = r.json().get("extract", "")
+                if len(extract) > 100:
+                    return extract[:1000]
+        except Exception:
+            pass
+    return ""
+
+
+def gather_context(brand_name):
+    """Собирает контекст из лучшего доступного источника."""
+    # Случайно выбираем источник для разнообразия
+    source_priority = rnd.choices(
+        ["rss", "reddit", "wiki"],
+        weights=[50, 30, 20],
+        k=1
+    )[0]
+
+    if source_priority == "rss":
+        src, title, desc = fetch_rss_item(brand_name)
+        if title:
+            return "rss", src, f"Заголовок: {title}\n{desc}"
+
+    if source_priority == "reddit":
+        title, text = fetch_reddit_sneakers()
+        if title:
+            return "reddit", "r/Sneakers", f"Обсуждение: {title}\n{text}"
+
+    # Fallback — попробовать оба оставшихся
+    src, title, desc = fetch_rss_item(brand_name)
+    if title:
+        return "rss", src, f"Заголовок: {title}\n{desc}"
+
+    title, text = fetch_reddit_sneakers()
+    if title:
+        return "reddit", "r/Sneakers", f"Обсуждение: {title}\n{text}"
+
+    wiki = fetch_wiki_facts(brand_name)
+    if wiki:
+        return "wiki", "Wikipedia", wiki
+
+    return "none", "", ""
+
+
+def vk_article_post(random_product=False):
+    """Публикует статью-пост на основе свежих новостей моды."""
+    print(f"[{datetime.datetime.now():%H:%M}] ВК статья...")
+    try:
+        if random_product:
+            product = rnd.choice(PRODUCTS)
+        else:
+            day_num = datetime.date.today().toordinal()
+            product = PRODUCTS[day_num % len(PRODUCTS)]
+
+        name   = product["name"]
+        photos = product["photos"]
+
+        # Собираем контекст из интернета
+        src_type, src_name, context = gather_context(name)
+
+        if src_type == "rss":
+            context_block = f"\n\nСвежая новость из {src_name}:\n{context}"
+            instruction = "Используй эту новость как вдохновение — перескажи идею на русском, адаптируй под аудиторию ВК"
+        elif src_type == "reddit":
+            context_block = f"\n\nЧто обсуждают любители кроссовок прямо сейчас ({src_name}):\n{context}"
+            instruction = "Используй эту тему как отправную точку для интересного поста"
+        elif src_type == "wiki":
+            context_block = f"\n\nФакты о бренде:\n{context}"
+            instruction = "Используй эти факты чтобы рассказать интересную историю"
+        else:
+            context_block = ""
+            instruction = "Придумай интересный угол — тренды, стиль, советы по выбору обуви"
+
+        prompt = f"""Напиши увлекательный пост-статью ВКонтакте для магазина KickLuxe (продаём реплики премиум кроссовок).
+
+Бренд в фокусе: {name}{context_block}
+
+Задача: {instruction}
+
+Требования:
+- 5-7 предложений, живо и интересно — как пишут модные блогеры
+- НЕ пиши "оригинал", "настоящая кожа", "оригинальное качество"
+- Плавно упомяни что похожие модели в стиле {name} есть в KickLuxe
+- В конце: "Смотрите на kickluxe.ru или пишите нам!"
+- 5 хэштегов: #KickLuxe #кроссовки #мода #{name.replace(' ', '')} #стиль
+- Начни с яркого эмодзи и цепляющего заголовка
+- Пиши сразу пост, без предисловий"""
+
+        resp = requests.post(
+            "https://api.anthropic.com/v1/messages",
+            headers={
+                "x-api-key": CLAUDE_API_KEY,
+                "anthropic-version": "2023-06-01",
+                "content-type": "application/json"
+            },
+            json={
+                "model": "claude-haiku-4-5-20251001",
+                "max_tokens": 1000,
+                "messages": [{"role": "user", "content": prompt}]
+            },
+            timeout=30
+        )
+
+        if resp.status_code != 200:
+            send(f"❌ Ошибка Claude при статье: {resp.status_code}")
+            return
+
+        post_text = resp.json()["content"][0]["text"]
+
+        photo_idx  = datetime.date.today().toordinal() % len(photos)
+        attachment = photos[photo_idx]
+
+        vk_params = {
+            "owner_id":   f"-{VK_GROUP_ID}",
+            "from_group": 1,
+            "message":    post_text,
+            "attachments": attachment,
+            "access_token": VK_TOKEN,
+            "v": "5.199"
+        }
+        r = requests.post("https://api.vk.com/method/wall.post", data=vk_params, timeout=15)
+        result = r.json()
+
+        if "response" in result:
+            post_id = result["response"]["post_id"]
+            send(
+                f"📰 Статья опубликована в ВК!\n"
+                f"vk.com/kickluxe?w=wall-{VK_GROUP_ID}_{post_id}\n\n"
+                f"Источник: {src_name or 'Claude'} | Бренд: {name}"
+            )
+        else:
+            send(f"❌ Ошибка публикации статьи: {result.get('error', {}).get('error_msg', str(result))}")
+
+    except Exception as e:
+        send(f"❌ Ошибка статьи: {e}")
+        print(f"vk_article_post error: {e}")
+
+
+def cmd_vkarticle():
+    send("📰 Пишу статью с интересными фактами...")
+    threading.Thread(target=lambda: vk_article_post(random_product=True)).start()
+
+
 def cmd_wordstat():
     send("📈 Запускаю Вордстат анализ — займёт 30-60 секунд...")
     threading.Thread(target=wordstat_weekly).start()
@@ -628,10 +867,15 @@ def cmd_help():
         "/report — отчёт прямо сейчас\n"
         "/optimize — ИИ анализирует и применяет изменения\n"
         "/status — статус кампании\n"
-        "/vkpost — опубликовать пост в ВК сейчас\n"
+        "/vkpost — пост с фото в ВК (случайная модель)\n"
+        "/vkarticle — статья с фактами о бренде в ВК\n"
+        "/wordstat — расширить ключи через Вордстат\n"
         "/help — эта подсказка\n\n"
-        f"Ежедневный отчёт в {REPORT_HOUR:02d}:00.\n"
-        f"Пост в ВК каждый день в {VK_POST_HOUR:02d}:00."
+        f"📅 Расписание:\n"
+        f"• Отчёт + оптимизация — каждый день {REPORT_HOUR:02d}:00\n"
+        f"• Пост с фото — каждый день {VK_POST_HOUR:02d}:00\n"
+        f"• Статья с фактами — Пн/Ср/Пт в 15:00\n"
+        f"• Вордстат — воскресенье 10:00"
     )
 
 
@@ -640,6 +884,9 @@ def cmd_help():
 def scheduler_loop():
     schedule.every().day.at(f"{REPORT_HOUR:02d}:00").do(cmd_optimize)
     schedule.every().day.at(f"{VK_POST_HOUR:02d}:00").do(vk_daily_post)
+    schedule.every().monday.at("15:00").do(vk_article_post)
+    schedule.every().wednesday.at("15:00").do(vk_article_post)
+    schedule.every().friday.at("15:00").do(vk_article_post)
     schedule.every().sunday.at("10:00").do(wordstat_weekly)
     while True:
         schedule.run_pending()
@@ -661,9 +908,10 @@ def main():
         "/report — отчёт сейчас\n"
         "/optimize — применить рекомендации ИИ\n"
         "/status — статус кампании\n"
-        "/vkpost — пост в ВК сейчас\n"
+        "/vkpost — пост с фото в ВК (случайная модель)\n"
+        "/vkarticle — статья с фактами о бренде в ВК\n"
         "/wordstat — расширить ключи через Вордстат\n"
-        f"\nОтчёт в {REPORT_HOUR:02d}:00. Пост в ВК в {VK_POST_HOUR:02d}:00. Вордстат по воскресеньям в 10:00."
+        "/help — все команды и расписание"
     )
     print(f"Отправка приветствия: {r}")
 
@@ -693,6 +941,8 @@ def main():
                     threading.Thread(target=cmd_status).start()
                 elif text.startswith("/vkpost"):
                     threading.Thread(target=cmd_vkpost).start()
+                elif text.startswith("/vkarticle"):
+                    cmd_vkarticle()
                 elif text.startswith("/wordstat"):
                     cmd_wordstat()
                 elif text.startswith("/help") or text.startswith("/start"):
