@@ -37,10 +37,11 @@ def tg(method, payload=None):
 
 
 def send(text):
-    tg("sendMessage", {
+    r = tg("sendMessage", {
         "chat_id": TELEGRAM_CHAT_ID,
         "text": text[:4096]
     })
+    return r
 
 
 def get_updates(offset=0):
@@ -275,25 +276,37 @@ def scheduler_loop():
 
 def main():
     print("KickLuxe Bot запущен на Railway")
-    threading.Thread(target=scheduler_loop, daemon=True).start()
-    send(
+    print(f"CHAT_ID настроен: {TELEGRAM_CHAT_ID}")
+
+    # Проверяем Telegram
+    me = tg("getMe")
+    print(f"Bot info: {me}")
+
+    r = send(
         "✅ KickLuxe Bot запущен!\n\n"
         "/report — отчёт сейчас\n"
         "/optimize — применить рекомендации ИИ\n"
         "/status — статус кампании\n"
         f"\nЕжедневный отчёт в {REPORT_HOUR:02d}:00."
     )
+    print(f"Отправка приветствия: {r}")
+
+    threading.Thread(target=scheduler_loop, daemon=True).start()
 
     offset = 0
     while True:
         try:
             updates = get_updates(offset)
+            if updates:
+                print(f"Получено обновлений: {len(updates)}")
             for upd in updates:
                 offset = upd["update_id"] + 1
                 msg = upd.get("message", {})
                 text = msg.get("text", "").strip()
                 chat_id = str(msg.get("chat", {}).get("id", ""))
+                print(f"Сообщение от chat_id={chat_id}, текст={text!r}")
                 if chat_id != TELEGRAM_CHAT_ID:
+                    print(f"Игнорирую: {chat_id} != {TELEGRAM_CHAT_ID}")
                     continue
                 print(f"Команда: {text}")
                 if text.startswith("/report"):
@@ -311,3 +324,4 @@ def main():
 
 if __name__ == "__main__":
     main()
+
