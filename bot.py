@@ -878,49 +878,65 @@ def cmd_vkarticle():
 def cmd_vkchannelid():
     """Находит peer_id канала сообщества ВК."""
     send("🔍 Ищу peer_id вашего канала ВК...")
+    found = []
+
+    # Способ 1: groups.getById с полем chats
     try:
-        # Получаем список бесед сообщества
-        r = requests.get("https://api.vk.com/method/messages.getConversations", params={
-            "filter": "all",
-            "count":  20,
+        r = requests.get("https://api.vk.com/method/groups.getById", params={
+            "group_id": VK_GROUP_ID,
+            "fields":   "chats",
             "access_token": VK_TOKEN,
             "v": "5.199"
         }, timeout=10)
         data = r.json()
-        if "error" in data:
-            send(f"❌ Ошибка VK API: {data['error']['error_msg']}")
-            return
+        groups = data.get("response", {}).get("groups", []) or data.get("response", [])
+        for g in (groups if isinstance(groups, list) else [groups]):
+            for chat in g.get("chats", {}).get("items", []):
+                found.append((chat.get("peer_id") or chat.get("id"), chat.get("title", "Канал")))
+    except Exception as e:
+        print(f"groups.getById chats error: {e}")
 
-        items = data.get("response", {}).get("items", [])
-        channels = []
-        for item in items:
-            conv = item.get("conversation", {})
-            peer = conv.get("peer", {})
-            peer_id = peer.get("id")
-            peer_type = peer.get("type")
-            # Каналы сообщества имеют тип "chat" с id >= 2000000000
-            if peer_type == "chat" and peer_id and peer_id >= 2000000000:
-                chat_settings = conv.get("chat_settings", {})
-                title = chat_settings.get("title", "Без названия")
-                channels.append((peer_id, title))
-
-        if channels:
-            msg = "📋 Найденные каналы/чаты:\n\n"
-            for pid, title in channels:
-                msg += f"• {title}\n  peer_id: {pid}\n\n"
-            msg += "Скопируйте нужный peer_id и добавьте в Railway:\nПеременная: VK_CHANNEL_PEER_ID\nЗначение: (нужный peer_id)"
-            send(msg)
-        else:
-            # Покажем все беседы чтобы найти вручную
-            msg = "Беседы не найдены автоматически. Все peer_id:\n\n"
-            for item in items[:10]:
+    # Способ 2: messages.getConversations через group_id
+    if not found:
+        try:
+            r = requests.get("https://api.vk.com/method/messages.getConversations", params={
+                "group_id": VK_GROUP_ID,
+                "filter":   "all",
+                "count":    20,
+                "access_token": VK_TOKEN,
+                "v": "5.199"
+            }, timeout=10)
+            data = r.json()
+            for item in data.get("response", {}).get("items", []):
                 conv = item.get("conversation", {})
                 peer = conv.get("peer", {})
-                msg += f"type={peer.get('type')} id={peer.get('id')}\n"
-            send(msg)
+                pid  = peer.get("id", 0)
+                if pid >= 2000000000:
+                    title = conv.get("chat_settings", {}).get("title", "Канал")
+                    found.append((pid, title))
+        except Exception as e:
+            print(f"getConversations group error: {e}")
 
-    except Exception as e:
-        send(f"❌ Ошибка: {e}")
+    if found:
+        msg = "✅ Найден канал:\n\n"
+        for pid, title in found:
+            msg += f"• {title}\n  peer_id: {pid}\n\n"
+        msg += "Добавьте в Railway → Variables:\nVK_CHANNEL_PEER_ID = (peer_id выше)"
+        send(msg)
+    else:
+        send(
+            "⚠️ Не удалось найти автоматически.\n\n"
+            "Найдите peer_id вручную:\n"
+            "1. Откройте ВК в браузере\n"
+            "2. Нажмите «Перейти в канал» в вашем сообществе\n"
+            "3. Посмотрите на URL — там будет что-то вроде:\n"
+            "   vk.com/im?sel=c123456\n"
+            "   Число после 'c' — это chat_id\n"
+            "4. peer_id = 2000000000 + chat_id\n"
+            "   (например c1234 → peer_id = 2000001234)\n\n"
+            "Добавьте в Railway → Variables:\n"
+            "VK_CHANNEL_PEER_ID = (полученный peer_id)"
+        )
 
 
 def cmd_wordstat():
