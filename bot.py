@@ -208,52 +208,52 @@ PRODUCTS = [
         "name": "Brunello Cucinelli",
         "desc": "Философия медленной моды. Ручная работа, натуральные материалы — кроссовки как произведение искусства.",
         "photos": [
-            "https://i.imgur.com/mnJsk7L.jpg",
-            "https://i.imgur.com/Xwa1NCu.jpg",
-            "https://i.imgur.com/G3v01RY.jpg",
-            "https://i.imgur.com/BiIGEDk.jpg",
-            "https://i.imgur.com/TYAqW4D.jpg",
+            "photo-232644257_457239167",
+            "photo-232644257_457239169",
+            "photo-232644257_457239176",
+            "photo-232644257_457239179",
+            "photo-232644257_457239180",
         ]
     },
     {
         "name": "Hide & Jack",
         "desc": "Итальянский бренд нового поколения. Яркие цвета, мягкая кожа, смелый дизайн для тех, кто хочет выделяться.",
         "photos": [
-            "https://i.imgur.com/SuXdjgL.jpg",
-            "https://i.imgur.com/x67KKMg.jpg",
-            "https://i.imgur.com/tVb0Avs.jpg",
-            "https://i.imgur.com/2Bh7AWU.jpg",
-            "https://i.imgur.com/0E7jene.jpg",
+            "photo-232644257_457239168",
+            "photo-232644257_457239171",
+            "photo-232644257_457239173",
+            "photo-232644257_457239184",
+            "photo-232644257_457239187",
         ]
     },
     {
         "name": "Hugo BOSS",
         "desc": "Современная мужская классика. Точный крой, премиальные материалы, уверенный стиль.",
         "photos": [
-            "https://i.imgur.com/sfPky6T.jpg",
-            "https://i.imgur.com/4PuN3Xl.jpg",
-            "https://i.imgur.com/ox68vCd.jpg",
-            "https://i.imgur.com/Gj2Thzf.jpg",
+            "photo-232644257_457239170",
+            "photo-232644257_457239172",
+            "photo-232644257_457239174",
+            "photo-232644257_457239175",
         ]
     },
     {
         "name": "Giorgio Armani",
         "desc": "Элегантность без компромиссов. Минимализм и безупречное качество от легендарного итальянского дома.",
         "photos": [
-            "https://i.imgur.com/1kigKC4.jpg",
-            "https://i.imgur.com/4Goc5Le.jpg",
-            "https://i.imgur.com/GF2rv5R.jpg",
-            "https://i.imgur.com/pwad9ca.jpg",
+            "photo-232644257_457239177",
+            "photo-232644257_457239183",
+            "photo-232644257_457239185",
+            "photo-232644257_457239186",
         ]
     },
     {
         "name": "Prada",
         "desc": "Итальянская роскошь. Кожа высшего качества, узнаваемый силуэт, статус на каждом шагу.",
         "photos": [
-            "https://i.imgur.com/GP1K8qs.jpg",
-            "https://i.imgur.com/E5qaFeC.jpg",
-            "https://i.imgur.com/G1uKtwu.jpg",
-            "https://i.imgur.com/03nWWIz.jpg",
+            "photo-232644257_457239188",
+            "photo-232644257_457239182",
+            "photo-232644257_457239181",
+            "photo-232644257_457239178",
         ]
     },
 ]
@@ -342,14 +342,7 @@ def vk_daily_post():
         post_text = r.json()["content"][0]["text"] if r.status_code == 200 else \
             f"✨ {name}\n\n{desc}\n\nДоставка по России. Оплата после примерки.\nkickluxe.ru\n\n#KickLuxe #премиум #люкс"
 
-        # Загружаем фото на ВК
-        attachments = []
-        for photo_url in selected_photos:
-            att = vk_upload_photo(photo_url)
-            if att:
-                attachments.append(att)
-
-        result = vk_write_post(post_text, attachments=",".join(attachments) if attachments else None)
+        result = vk_write_post(post_text, attachments=",".join(selected_photos))
         post_id = result.get("response", {}).get("post_id")
 
         if post_id:
