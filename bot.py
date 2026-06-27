@@ -724,14 +724,31 @@ def fetch_wiki_facts(brand_name):
     return ""
 
 
+YOUTH_TOPICS = [
+    "сникер-культура и почему молодёжь выбирает кроссовки как главный элемент образа",
+    "как стритвир захватил мировую моду — от подвалов до подиумов",
+    "дропы и гиперхайп: почему люди ночуют в очередях за кроссовками",
+    "кроссовки как инвестиция: молодёжь скупает обувь вместо акций",
+    "тiktok-тренды в моде и какие силуэты сейчас на пике",
+    "скейтборд-культура и её влияние на современную уличную обувь",
+    "как рэп и хип-хоп изменили индустрию кроссовок навсегда",
+    "почему поколение Z выбирает стиль, а не статусные бренды",
+    "луки 2025: как носят кроссовки сейчас — реальные образы с улиц",
+    "капсульный гардероб молодого человека: 5 пар обуви на все случаи",
+]
+
+
 def gather_context(brand_name):
     """Собирает контекст из лучшего доступного источника."""
-    # Случайно выбираем источник для разнообразия
     source_priority = rnd.choices(
-        ["rss", "reddit", "wiki"],
-        weights=[50, 30, 20],
+        ["rss", "reddit", "wiki", "youth"],
+        weights=[40, 25, 15, 20],
         k=1
     )[0]
+
+    if source_priority == "youth":
+        topic = rnd.choice(YOUTH_TOPICS)
+        return "youth", "Молодёжная культура", topic
 
     if source_priority == "rss":
         src, title, desc = fetch_rss_item(brand_name)
@@ -743,7 +760,7 @@ def gather_context(brand_name):
         if title:
             return "reddit", "r/Sneakers", f"Обсуждение: {title}\n{text}"
 
-    # Fallback — попробовать оба оставшихся
+    # Fallback по очереди
     src, title, desc = fetch_rss_item(brand_name)
     if title:
         return "rss", src, f"Заголовок: {title}\n{desc}"
@@ -756,7 +773,8 @@ def gather_context(brand_name):
     if wiki:
         return "wiki", "Wikipedia", wiki
 
-    return "none", "", ""
+    topic = rnd.choice(YOUTH_TOPICS)
+    return "youth", "Молодёжная культура", topic
 
 
 def vk_article_post(random_product=False):
@@ -784,6 +802,9 @@ def vk_article_post(random_product=False):
         elif src_type == "wiki":
             context_block = f"\n\nФакты о бренде:\n{context}"
             instruction = "Используй эти факты чтобы рассказать интересную историю"
+        elif src_type == "youth":
+            context_block = f"\n\nТема: {context}"
+            instruction = "Напиши пост в молодёжном стиле — живо, дерзко, как для аудитории 18-30 лет. Раскрой тему и свяжи с брендом"
         else:
             context_block = ""
             instruction = "Придумай интересный угол — тренды, стиль, советы по выбору обуви"
@@ -827,42 +848,20 @@ def vk_article_post(random_product=False):
         photo_idx  = datetime.date.today().toordinal() % len(photos)
         attachment = photos[photo_idx]
 
-        if VK_CHANNEL_PEER_ID and VK_USER_TOKEN:
-            # Канал: messages.send с личным токеном администратора
-            r = requests.post("https://api.vk.com/method/messages.send", data={
-                "peer_id":     VK_CHANNEL_PEER_ID,
-                "message":     post_text,
-                "attachment":  attachment,
-                "access_token": VK_USER_TOKEN,
-                "random_id":   int(time.time()),
-                "v": "5.199"
-            }, timeout=15)
-            result = r.json()
-            if "response" in result:
-                send(f"📰 Статья опубликована в канале ВК!\nИсточник: {src_name or 'Claude'} | Бренд: {name}")
-            else:
-                err = result.get("error", {}).get("error_msg", str(result))
-                send(f"❌ Ошибка: {err}")
+        r = requests.post("https://api.vk.com/method/wall.post", data={
+            "owner_id":    f"-{VK_GROUP_ID}",
+            "from_group":  1,
+            "message":     post_text,
+            "attachments": attachment,
+            "access_token": VK_TOKEN,
+            "v": "5.199"
+        }, timeout=15)
+        result = r.json()
+        if "response" in result:
+            src_label = {"rss": "🌐 RSS", "reddit": "💬 Reddit", "wiki": "📖 Wiki", "youth": "🔥 Молодёжное"}.get(src_type, "✍️ Claude")
+            send(f"📰 Статья на стене ВК!\n{src_label} | Бренд: {name}")
         else:
-            # Запасной вариант — стена сообщества
-            r = requests.post("https://api.vk.com/method/wall.post", data={
-                "owner_id":    f"-{VK_GROUP_ID}",
-                "from_group":  1,
-                "message":     post_text,
-                "attachments": attachment,
-                "access_token": VK_TOKEN,
-                "v": "5.199"
-            }, timeout=15)
-            result = r.json()
-            if "response" in result:
-                post_id = result["response"]["post_id"]
-                send(
-                    f"📰 Статья опубликована на стене ВК!\n"
-                    f"(Установите VK_CHANNEL_PEER_ID чтобы слать в канал)\n"
-                    f"Источник: {src_name or 'Claude'} | Бренд: {name}"
-                )
-            else:
-                send(f"❌ Ошибка публикации: {result.get('error', {}).get('error_msg', str(result))}")
+            send(f"❌ Ошибка публикации: {result.get('error', {}).get('error_msg', str(result))}")
 
     except Exception as e:
         send(f"❌ Ошибка статьи: {e}")
@@ -1038,4 +1037,5 @@ def main():
 
 if __name__ == "__main__":
     main()
+
 
