@@ -203,16 +203,60 @@ def ask_claude(prompt):
 
 # ─── ВК АВТОПОСТИНГ ───
 
-def vk_get_products():
-    r = requests.get("https://api.vk.com/method/market.get", params={
-        "owner_id": f"-{VK_GROUP_ID}",
-        "count": 100,
-        "extended": 1,
-        "access_token": VK_TOKEN,
-        "v": "5.199"
-    })
-    items = r.json().get("response", {}).get("items", [])
-    return items
+PRODUCTS = [
+    {
+        "name": "Brunello Cucinelli",
+        "desc": "Философия медленной моды. Ручная работа, натуральные материалы — кроссовки как произведение искусства.",
+        "photos": [
+            "https://i.imgur.com/mnJsk7L.jpg",
+            "https://i.imgur.com/Xwa1NCu.jpg",
+            "https://i.imgur.com/G3v01RY.jpg",
+            "https://i.imgur.com/BiIGEDk.jpg",
+            "https://i.imgur.com/TYAqW4D.jpg",
+        ]
+    },
+    {
+        "name": "Hide & Jack",
+        "desc": "Итальянский бренд нового поколения. Яркие цвета, мягкая кожа, смелый дизайн для тех, кто хочет выделяться.",
+        "photos": [
+            "https://i.imgur.com/SuXdjgL.jpg",
+            "https://i.imgur.com/x67KKMg.jpg",
+            "https://i.imgur.com/tVb0Avs.jpg",
+            "https://i.imgur.com/2Bh7AWU.jpg",
+            "https://i.imgur.com/0E7jene.jpg",
+        ]
+    },
+    {
+        "name": "Hugo BOSS",
+        "desc": "Современная мужская классика. Точный крой, премиальные материалы, уверенный стиль.",
+        "photos": [
+            "https://i.imgur.com/sfPky6T.jpg",
+            "https://i.imgur.com/4PuN3Xl.jpg",
+            "https://i.imgur.com/ox68vCd.jpg",
+            "https://i.imgur.com/Gj2Thzf.jpg",
+        ]
+    },
+    {
+        "name": "Giorgio Armani",
+        "desc": "Элегантность без компромиссов. Минимализм и безупречное качество от легендарного итальянского дома.",
+        "photos": [
+            "https://i.imgur.com/1kigKC4.jpg",
+            "https://i.imgur.com/4Goc5Le.jpg",
+            "https://i.imgur.com/GF2rv5R.jpg",
+            "https://i.imgur.com/pwad9ca.jpg",
+        ]
+    },
+    {
+        "name": "Prada",
+        "desc": "Итальянская роскошь. Кожа высшего качества, узнаваемый силуэт, статус на каждом шагу.",
+        "photos": [
+            "https://i.imgur.com/GP1K8qs.jpg",
+            "https://i.imgur.com/E5qaFeC.jpg",
+            "https://i.imgur.com/G1uKtwu.jpg",
+            "https://i.imgur.com/03nWWIz.jpg",
+        ]
+    },
+]
 
 
 def vk_write_post(text, photo_url=None, attachments=None):
@@ -229,74 +273,91 @@ def vk_write_post(text, photo_url=None, attachments=None):
     return r.json()
 
 
+def vk_upload_photo(image_url):
+    """Загружает фото по URL на стену ВК и возвращает attachment строку."""
+    try:
+        # Шаг 1: получаем сервер загрузки
+        r = requests.get("https://api.vk.com/method/photos.getWallUploadServer", params={
+            "group_id": VK_GROUP_ID,
+            "access_token": VK_TOKEN,
+            "v": "5.199"
+        })
+        upload_url = r.json()["response"]["upload_url"]
+
+        # Шаг 2: скачиваем фото и загружаем на сервер ВК
+        img_data = requests.get(image_url).content
+        upload_r = requests.post(upload_url, files={"photo": ("photo.jpg", img_data, "image/jpeg")})
+        uploaded = upload_r.json()
+
+        # Шаг 3: сохраняем фото
+        save_r = requests.post("https://api.vk.com/method/photos.saveWallPhoto", params={
+            "group_id": VK_GROUP_ID,
+            "photo": uploaded["photo"],
+            "server": uploaded["server"],
+            "hash": uploaded["hash"],
+            "access_token": VK_TOKEN,
+            "v": "5.199"
+        })
+        photo = save_r.json()["response"][0]
+        return f"photo{photo['owner_id']}_{photo['id']}"
+    except Exception as e:
+        print(f"Ошибка загрузки фото: {e}")
+        return None
+
+
 def vk_daily_post():
     print(f"[{datetime.datetime.now():%H:%M}] ВК автопостинг...")
     try:
-        products = vk_get_products()
-        if not products:
-            print("ВК: товары не найдены")
-            send("⚠️ ВК: товары не найдены в магазине")
-            return
+        # Выбираем продукт по дню
+        day_idx = datetime.date.today().toordinal() % len(PRODUCTS)
+        product = PRODUCTS[day_idx]
+        name = product["name"]
+        desc = product["desc"]
+        photos = product["photos"]
 
-        # Выбираем товар по дню недели (чередуем)
-        day_idx = datetime.date.today().toordinal() % len(products)
-        product = products[day_idx]
-
-        name = product.get("title", "Кроссовки")
-        price = product.get("price", {}).get("amount", 0)
-        price_str = f"{int(price) // 100:,}".replace(",", " ") + " ₽" if price else ""
-        description = product.get("description", "")
-
-        # Берём фото товара
-        photos = product.get("photos", [])
-        attachment = None
-        if photos:
-            p = photos[0]
-            owner = p.get("owner_id")
-            pid = p.get("id")
-            attachment = f"photo{owner}_{pid}"
+        # Выбираем 1-2 фото для поста (чередуем)
+        photo_idx = (datetime.date.today().toordinal() // len(PRODUCTS)) % len(photos)
+        selected_photos = [photos[photo_idx], photos[(photo_idx + 1) % len(photos)]]
 
         # Генерируем текст через Claude
         prompt = f"""Напиши продающий пост ВКонтакте для магазина премиум кроссовок KickLuxe.
 
-Товар: {name}
-Цена: {price_str}
-Описание: {description[:300] if description else 'премиальные кроссовки'}
+Бренд: {name}
+Особенности: {desc}
 
 Требования:
 - 3-5 предложений, живой и эмоциональный текст
 - Подчеркни эксклюзивность и качество
-- В конце призыв написать в личные сообщения сообщества
-- Добавь 3-5 релевантных хэштегов
-- Без лишних вступлений, сразу текст поста"""
+- Упомяни доставку по России и оплату после примерки
+- В конце: "Пишите в сообщения или на сайт kickluxe.ru"
+- Добавь 4-5 хэштегов: #KickLuxe #кроссовки #{name.replace(' ', '')} #премиум #люкс
+- Без вступлений, сразу текст поста"""
 
         r = requests.post(
             "https://api.anthropic.com/v1/messages",
-            headers={
-                "x-api-key": CLAUDE_API_KEY,
-                "anthropic-version": "2023-06-01",
-                "content-type": "application/json"
-            },
-            json={
-                "model": "claude-haiku-4-5-20251001",
-                "max_tokens": 500,
-                "messages": [{"role": "user", "content": prompt}]
-            }
+            headers={"x-api-key": CLAUDE_API_KEY, "anthropic-version": "2023-06-01", "content-type": "application/json"},
+            json={"model": "claude-haiku-4-5-20251001", "max_tokens": 500,
+                  "messages": [{"role": "user", "content": prompt}]}
         )
-        if r.status_code == 200:
-            post_text = r.json()["content"][0]["text"]
-        else:
-            post_text = f"✨ {name}\n\nПремиум качество по лучшей цене. Пишите в сообщения!\n\n#кроссовки #премиум #KickLuxe"
+        post_text = r.json()["content"][0]["text"] if r.status_code == 200 else \
+            f"✨ {name}\n\n{desc}\n\nДоставка по России. Оплата после примерки.\nkickluxe.ru\n\n#KickLuxe #премиум #люкс"
 
-        result = vk_write_post(post_text, attachments=attachment)
+        # Загружаем фото на ВК
+        attachments = []
+        for photo_url in selected_photos:
+            att = vk_upload_photo(photo_url)
+            if att:
+                attachments.append(att)
+
+        result = vk_write_post(post_text, attachments=",".join(attachments) if attachments else None)
         post_id = result.get("response", {}).get("post_id")
 
         if post_id:
-            print(f"ВК: пост опубликован #{post_id}")
-            send(f"✅ ВК пост опубликован!\nТовар: {name}\nvk.com/wall-{VK_GROUP_ID}_{post_id}")
+            print(f"ВК: пост #{post_id} опубликован")
+            send(f"✅ ВК пост опубликован — {name}\nvk.com/wall-{VK_GROUP_ID}_{post_id}")
         else:
             print(f"ВК ошибка: {result}")
-            send(f"⚠️ ВК ошибка публикации: {result}")
+            send(f"⚠️ ВК ошибка: {result}")
 
     except Exception as e:
         print(f"ВК ошибка: {e}")
