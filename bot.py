@@ -459,12 +459,15 @@ def vk_upload_photo(image_url):
         return None
 
 
-def vk_daily_post():
+def vk_daily_post(random_product=False):
     print(f"[{datetime.datetime.now():%H:%M}] ВК автопостинг...")
     try:
-        # Выбираем продукт по дню
-        day_idx = datetime.date.today().toordinal() % len(PRODUCTS)
-        product = PRODUCTS[day_idx]
+        if random_product:
+            import random
+            product = random.choice(PRODUCTS)
+        else:
+            day_idx = datetime.date.today().toordinal() % len(PRODUCTS)
+            product = PRODUCTS[day_idx]
         name = product["name"]
         desc = product["desc"]
         photos = product["photos"]
@@ -610,8 +613,8 @@ def cmd_status():
 
 
 def cmd_vkpost():
-    send("📸 Публикую пост в ВК...")
-    vk_daily_post()
+    send("📸 Публикую пост в ВК (случайная модель)...")
+    vk_daily_post(random_product=True)
 
 
 def cmd_wordstat():
@@ -701,3 +704,4 @@ def main():
 
 if __name__ == "__main__":
     main()
+
