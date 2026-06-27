@@ -828,12 +828,13 @@ def vk_article_post(random_product=False):
         attachment = photos[photo_idx]
 
         if VK_CHANNEL_PEER_ID and VK_USER_TOKEN:
-            # Канал требует личного токена администратора
-            r = requests.post("https://api.vk.com/method/wall.post", data={
-                "owner_id":    VK_CHANNEL_PEER_ID,
+            # Канал: messages.send с личным токеном администратора
+            r = requests.post("https://api.vk.com/method/messages.send", data={
+                "peer_id":     VK_CHANNEL_PEER_ID,
                 "message":     post_text,
-                "attachments": attachment,
+                "attachment":  attachment,
                 "access_token": VK_USER_TOKEN,
+                "random_id":   int(time.time()),
                 "v": "5.199"
             }, timeout=15)
             result = r.json()
@@ -841,7 +842,7 @@ def vk_article_post(random_product=False):
                 send(f"📰 Статья опубликована в канале ВК!\nИсточник: {src_name or 'Claude'} | Бренд: {name}")
             else:
                 err = result.get("error", {}).get("error_msg", str(result))
-                send(f"❌ Ошибка публикации в канал: {err}")
+                send(f"❌ Ошибка: {err}")
         else:
             # Запасной вариант — стена сообщества
             r = requests.post("https://api.vk.com/method/wall.post", data={
