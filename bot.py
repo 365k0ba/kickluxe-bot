@@ -181,7 +181,7 @@ def wordstat_weekly():
         seeds = [
             "купить кроссовки Prada",
             "кроссовки Armani мужские",
-            "кроссовки BOSS оригинал",
+            "кроссовки BOSS стиль",
             "Brunello Cucinelli кроссовки",
             "Hide Jack кроссовки",
             "премиум кроссовки купить",
@@ -210,7 +210,7 @@ def wordstat_weekly():
         current_str = "\n".join(f"- {k}" for k in current_list[:30])
         suggest_str = "\n".join(f"- {s['keyword']} (частота: {s['freq']})" for s in suggestions[:20]) if suggestions else "нет данных от API"
 
-        prompt = f"""Ты SEO-аналитик магазина KickLuxe (премиум кроссовки: Prada, Armani, BOSS, Brunello Cucinelli, Hide & Jack).
+        prompt = f"""Ты SEO-аналитик магазина KickLuxe (реплики премиум кроссовок: Prada, Armani, BOSS, Brunello Cucinelli, Hide & Jack).
 
 Текущие ключевые слова в кампании:
 {current_str}
@@ -305,7 +305,7 @@ def wordstat_weekly():
 # ─── CLAUDE ───
 
 def ask_claude(prompt):
-    system = """Ты — ИИ-аналитик магазина KickLuxe (премиум кроссовки: Prada, Armani, BOSS, Brunello Cucinelli, Hide & Jack).
+    system = """Ты — ИИ-аналитик магазина KickLuxe (реплики премиум кроссовок: Prada, Armani, BOSS, Brunello Cucinelli, Hide & Jack).
 
 Твой ответ — ДВЕ части, разделённые строкой ---JSON---:
 
@@ -360,7 +360,7 @@ def ask_claude(prompt):
 PRODUCTS = [
     {
         "name": "Brunello Cucinelli",
-        "desc": "Философия медленной моды. Ручная работа, натуральные материалы — кроссовки как произведение искусства.",
+        "desc": "Философия медленной моды. Стильный дизайн, безупречный силуэт — кроссовки как произведение искусства.",
         "photos": [
             "photo-232644257_457239167",
             "photo-232644257_457239169",
@@ -371,7 +371,7 @@ PRODUCTS = [
     },
     {
         "name": "Hide & Jack",
-        "desc": "Итальянский бренд нового поколения. Яркие цвета, мягкая кожа, смелый дизайн для тех, кто хочет выделяться.",
+        "desc": "Итальянский бренд нового поколения. Яркие цвета, смелый дизайн для тех, кто хочет выделяться.",
         "photos": [
             "photo-232644257_457239168",
             "photo-232644257_457239171",
@@ -382,7 +382,7 @@ PRODUCTS = [
     },
     {
         "name": "Hugo BOSS",
-        "desc": "Современная мужская классика. Точный крой, премиальные материалы, уверенный стиль.",
+        "desc": "Современная мужская классика. Точный крой, уверенный стиль и узнаваемый дизайн.",
         "photos": [
             "photo-232644257_457239170",
             "photo-232644257_457239172",
@@ -392,7 +392,7 @@ PRODUCTS = [
     },
     {
         "name": "Giorgio Armani",
-        "desc": "Элегантность без компромиссов. Минимализм и безупречное качество от легендарного итальянского дома.",
+        "desc": "Элегантность без компромиссов. Минимализм и безупречный стиль от легендарного итальянского дома.",
         "photos": [
             "photo-232644257_457239177",
             "photo-232644257_457239183",
@@ -402,7 +402,7 @@ PRODUCTS = [
     },
     {
         "name": "Prada",
-        "desc": "Итальянская роскошь. Кожа высшего качества, узнаваемый силуэт, статус на каждом шагу.",
+        "desc": "Итальянская роскошь в каждой детали. Узнаваемый силуэт, статус и стиль на каждом шагу.",
         "photos": [
             "photo-232644257_457239188",
             "photo-232644257_457239182",
@@ -474,17 +474,18 @@ def vk_daily_post():
         selected_photos = [photos[photo_idx], photos[(photo_idx + 1) % len(photos)]]
 
         # Генерируем текст через Claude
-        prompt = f"""Напиши продающий пост ВКонтакте для магазина премиум кроссовок KickLuxe.
+        prompt = f"""Напиши продающий пост ВКонтакте для магазина KickLuxe, который продаёт реплики премиум кроссовок.
 
 Бренд: {name}
-Особенности: {desc}
+Описание: {desc}
 
 Требования:
 - 3-5 предложений, живой и эмоциональный текст
-- Подчеркни эксклюзивность и качество
+- Пиши про стиль, внешний вид, дизайн — НЕ пиши "оригинал", "настоящая кожа", "оригинальное качество"
+- Акцент на доступность премиального стиля, внешний вид как у люкса
 - Упомяни доставку по России и оплату после примерки
 - В конце: "Пишите в сообщения или на сайт kickluxe.ru"
-- Добавь 4-5 хэштегов: #KickLuxe #кроссовки #{name.replace(' ', '')} #премиум #люкс
+- Добавь 4-5 хэштегов: #KickLuxe #кроссовки #{name.replace(' ', '')} #стиль #премиумлук
 - Без вступлений, сразу текст поста"""
 
         r = requests.post(
@@ -544,23 +545,66 @@ def cmd_optimize():
         send("ℹ️ ИИ не нашёл действий для применения.")
 
 
+def get_direct_stats():
+    """Статистика кампании из Директа за сегодня."""
+    today = datetime.date.today().isoformat()
+    res = direct("reports", {
+        "method": "get",
+        "params": {
+            "SelectionCriteria": {
+                "DateFrom": today,
+                "DateTo": today,
+                "Filter": [{"Field": "CampaignId", "Operator": "IN", "Values": [str(CAMPAIGN_ID)]}]
+            },
+            "FieldNames": ["Impressions", "Clicks", "Ctr", "Cost"],
+            "ReportType": "CAMPAIGN_PERFORMANCE_REPORT",
+            "DateRangeType": "CUSTOM_DATE",
+            "Format": "TSV",
+            "IncludeVAT": "NO",
+            "IncludeDiscount": "NO"
+        }
+    })
+    try:
+        lines = res.strip().split("\n")
+        if len(lines) >= 3:
+            data = lines[2].split("\t")
+            return {
+                "impressions": int(data[0]) if data[0] != "--" else 0,
+                "clicks": int(data[1]) if data[1] != "--" else 0,
+                "ctr": float(data[2]) if data[2] != "--" else 0.0,
+                "cost": round(float(data[3]) / 1000000, 2) if data[3] != "--" else 0.0
+            }
+    except Exception:
+        pass
+    return {"impressions": 0, "clicks": 0, "ctr": 0.0, "cost": 0.0}
+
+
 def cmd_status():
     camp = get_campaign_status()
     m = get_metrika()
     kw = get_keywords()
+    d = get_direct_stats()
+
     status_map = {
         "ACCEPTED": "✅ Активна",
         "MODERATION": "⏳ На модерации",
         "REJECTED": "❌ Отклонена",
     }
     status = status_map.get(camp.get("Status", ""), "?") if camp else "не найдена"
+
     send(
-        f"📊 Статус KickLuxe\n\n"
-        f"Кампания: {status}\n"
-        f"Ключевых слов: {len(kw)}\n\n"
-        f"Метрика сегодня:\n"
+        f"📊 Статус KickLuxe — {datetime.date.today().strftime('%d.%m.%Y')}\n\n"
+        f"🎯 Кампания: {status}\n"
+        f"🔑 Ключевых слов: {len(kw)}\n\n"
+        f"📣 Директ сегодня:\n"
+        f"• Показы: {d['impressions']}\n"
+        f"• Клики: {d['clicks']}\n"
+        f"• CTR: {d['ctr']}%\n"
+        f"• Расход: {d['cost']} ₽\n\n"
+        f"🌐 Метрика сегодня:\n"
         f"• Визиты: {m['visits']}\n"
         f"• Отказы: {m['bounce']}%\n"
+        f"• Глубина: {m['depth']} стр.\n"
         f"• Время: {m['duration']} сек."
     )
 
