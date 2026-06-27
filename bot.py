@@ -21,6 +21,7 @@ REPORT_HOUR        = int(os.environ.get("REPORT_HOUR", "9"))
 VK_TOKEN           = os.environ.get("VK_TOKEN", "")
 VK_GROUP_ID        = os.environ.get("VK_GROUP_ID", "232644257")
 VK_POST_HOUR       = int(os.environ.get("VK_POST_HOUR", "12"))
+VK_CHANNEL_PEER_ID = os.environ.get("VK_CHANNEL_PEER_ID", "")
 
 DIRECT_HEADERS = {
     "Authorization": f"Bearer {YANDEX_TOKEN}",
@@ -825,26 +826,44 @@ def vk_article_post(random_product=False):
         photo_idx  = datetime.date.today().toordinal() % len(photos)
         attachment = photos[photo_idx]
 
-        vk_params = {
-            "owner_id":   f"-{VK_GROUP_ID}",
-            "from_group": 1,
-            "message":    post_text,
-            "attachments": attachment,
-            "access_token": VK_TOKEN,
-            "v": "5.199"
-        }
-        r = requests.post("https://api.vk.com/method/wall.post", data=vk_params, timeout=15)
-        result = r.json()
-
-        if "response" in result:
-            post_id = result["response"]["post_id"]
-            send(
-                f"📰 Статья опубликована в ВК!\n"
-                f"vk.com/kickluxe?w=wall-{VK_GROUP_ID}_{post_id}\n\n"
-                f"Источник: {src_name or 'Claude'} | Бренд: {name}"
-            )
+        if VK_CHANNEL_PEER_ID:
+            # Публикуем в канал сообщества (подписчики получают в ЛС)
+            r = requests.post("https://api.vk.com/method/messages.send", data={
+                "peer_id":    VK_CHANNEL_PEER_ID,
+                "message":    post_text,
+                "attachment": attachment,
+                "access_token": VK_TOKEN,
+                "random_id":  int(time.time()),
+                "v": "5.199"
+            }, timeout=15)
+            result = r.json()
+            if "response" in result:
+                send(
+                    f"📰 Статья отправлена в канал ВК!\n"
+                    f"Источник: {src_name or 'Claude'} | Бренд: {name}"
+                )
+            else:
+                send(f"❌ Ошибка отправки в канал: {result.get('error', {}).get('error_msg', str(result))}")
         else:
-            send(f"❌ Ошибка публикации статьи: {result.get('error', {}).get('error_msg', str(result))}")
+            # Запасной вариант — стена сообщества
+            r = requests.post("https://api.vk.com/method/wall.post", data={
+                "owner_id":    f"-{VK_GROUP_ID}",
+                "from_group":  1,
+                "message":     post_text,
+                "attachments": attachment,
+                "access_token": VK_TOKEN,
+                "v": "5.199"
+            }, timeout=15)
+            result = r.json()
+            if "response" in result:
+                post_id = result["response"]["post_id"]
+                send(
+                    f"📰 Статья опубликована на стене ВК!\n"
+                    f"(Установите VK_CHANNEL_PEER_ID чтобы слать в канал)\n"
+                    f"Источник: {src_name or 'Claude'} | Бренд: {name}"
+                )
+            else:
+                send(f"❌ Ошибка публикации: {result.get('error', {}).get('error_msg', str(result))}")
 
     except Exception as e:
         send(f"❌ Ошибка статьи: {e}")
@@ -854,6 +873,54 @@ def vk_article_post(random_product=False):
 def cmd_vkarticle():
     send("📰 Пишу статью с интересными фактами...")
     threading.Thread(target=lambda: vk_article_post(random_product=True)).start()
+
+
+def cmd_vkchannelid():
+    """Находит peer_id канала сообщества ВК."""
+    send("🔍 Ищу peer_id вашего канала ВК...")
+    try:
+        # Получаем список бесед сообщества
+        r = requests.get("https://api.vk.com/method/messages.getConversations", params={
+            "filter": "all",
+            "count":  20,
+            "access_token": VK_TOKEN,
+            "v": "5.199"
+        }, timeout=10)
+        data = r.json()
+        if "error" in data:
+            send(f"❌ Ошибка VK API: {data['error']['error_msg']}")
+            return
+
+        items = data.get("response", {}).get("items", [])
+        channels = []
+        for item in items:
+            conv = item.get("conversation", {})
+            peer = conv.get("peer", {})
+            peer_id = peer.get("id")
+            peer_type = peer.get("type")
+            # Каналы сообщества имеют тип "chat" с id >= 2000000000
+            if peer_type == "chat" and peer_id and peer_id >= 2000000000:
+                chat_settings = conv.get("chat_settings", {})
+                title = chat_settings.get("title", "Без названия")
+                channels.append((peer_id, title))
+
+        if channels:
+            msg = "📋 Найденные каналы/чаты:\n\n"
+            for pid, title in channels:
+                msg += f"• {title}\n  peer_id: {pid}\n\n"
+            msg += "Скопируйте нужный peer_id и добавьте в Railway:\nПеременная: VK_CHANNEL_PEER_ID\nЗначение: (нужный peer_id)"
+            send(msg)
+        else:
+            # Покажем все беседы чтобы найти вручную
+            msg = "Беседы не найдены автоматически. Все peer_id:\n\n"
+            for item in items[:10]:
+                conv = item.get("conversation", {})
+                peer = conv.get("peer", {})
+                msg += f"type={peer.get('type')} id={peer.get('id')}\n"
+            send(msg)
+
+    except Exception as e:
+        send(f"❌ Ошибка: {e}")
 
 
 def cmd_wordstat():
@@ -943,6 +1010,8 @@ def main():
                     threading.Thread(target=cmd_vkpost).start()
                 elif text.startswith("/vkarticle"):
                     cmd_vkarticle()
+                elif text.startswith("/vkchannelid"):
+                    cmd_vkchannelid()
                 elif text.startswith("/wordstat"):
                     cmd_wordstat()
                 elif text.startswith("/help") or text.startswith("/start"):
