@@ -102,9 +102,172 @@ def get_keywords():
     gids = [g["Id"] for g in groups]
     res = direct("keywords", {"method": "get", "params": {
         "SelectionCriteria": {"AdGroupIds": gids},
-        "FieldNames": ["Id", "Keyword", "AdGroupId"]
+        "FieldNames": ["Id", "Keyword", "AdGroupId", "Bid", "State", "Status"]
     }})
     return res.get("result", {}).get("Keywords", [])
+
+
+def get_keyword_stats(days=7):
+    """Статистика по каждому ключевому слову за N дней."""
+    date_to   = datetime.date.today()
+    date_from = date_to - datetime.timedelta(days=days)
+    res = direct("reports", {
+        "method": "get",
+        "params": {
+            "SelectionCriteria": {
+                "DateFrom": date_from.isoformat(),
+                "DateTo":   date_to.isoformat(),
+                "Filter": [{"Field": "CampaignId", "Operator": "IN", "Values": [str(CAMPAIGN_ID)]}]
+            },
+            "FieldNames": ["Keyword", "Impressions", "Clicks", "Ctr", "AvgCpc", "Cost"],
+            "ReportType":    "SEARCH_QUERY_PERFORMANCE_REPORT",
+            "DateRangeType": "CUSTOM_DATE",
+            "Format":        "TSV",
+            "IncludeVAT":    "NO",
+            "IncludeDiscount": "NO"
+        }
+    })
+    stats = {}
+    try:
+        lines = res.strip().split("\n")
+        for line in lines[2:]:  # пропускаем заголовки
+            parts = line.split("\t")
+            if len(parts) < 6:
+                continue
+            kw = parts[0]
+            stats[kw] = {
+                "impressions": int(parts[1])   if parts[1] != "--" else 0,
+                "clicks":      int(parts[2])   if parts[2] != "--" else 0,
+                "ctr":         float(parts[3]) if parts[3] != "--" else 0.0,
+                "avg_cpc":     round(float(parts[4]) / 1_000_000, 2) if parts[4] != "--" else 0.0,
+                "cost":        round(float(parts[5]) / 1_000_000, 2) if parts[5] != "--" else 0.0,
+            }
+    except Exception as e:
+        print(f"get_keyword_stats error: {e}")
+    return stats
+
+
+# Хранилище ожидающих одобрения изменений ставок
+_pending_bids = {}
+
+
+def analyze_bids():
+    """Анализирует ставки по ключам, просит одобрения у пользователя."""
+    keywords = get_keywords()
+    if not keywords:
+        send("⚠️ Ключевые слова не найдены для анализа.")
+        return
+
+    stats = get_keyword_stats(days=7)
+
+    # Собираем сводку для Клода
+    lines = []
+    for kw in keywords:
+        name  = kw["Keyword"]
+        bid   = kw.get("Bid", 0)
+        bid_r = round(bid / 1_000_000, 0) if bid else 0
+        state = kw.get("State", "")
+        s = stats.get(name, {})
+        lines.append(
+            f"• {name} | ставка {bid_r}₽ | показы {s.get('impressions',0)} | "
+            f"клики {s.get('clicks',0)} | CTR {s.get('ctr',0)}% | "
+            f"ср.цена клика {s.get('avg_cpc',0)}₽ | расход {s.get('cost',0)}₽ | статус {state}"
+        )
+
+    kw_block = "\n".join(lines)
+    prompt = f"""Ты эксперт по Яндекс Директ. Проанализируй ставки по ключевым словам магазина реплик кроссовок KickLuxe за последние 7 дней.
+
+{kw_block}
+
+Для каждого ключа дай одно из действий:
+- ПОДНЯТЬ до X₽ (если CTR хороший или показов мало из-за низкой ставки)
+- СНИЗИТЬ до X₽ (если цена клика слишком высокая при низком CTR)
+- ОТКЛЮЧИТЬ (если 0 кликов при большом расходе или нет показов несколько дней)
+- ОСТАВИТЬ (если всё в норме)
+
+Ответ строго в формате:
+КЛЮЧ | ДЕЙСТВИЕ | ПРИЧИНА (одна строка)
+
+НЕ пиши вводный текст, только таблицу."""
+
+    resp = requests.post(
+        "https://api.anthropic.com/v1/messages",
+        headers={
+            "x-api-key": CLAUDE_API_KEY,
+            "anthropic-version": "2023-06-01",
+            "content-type": "application/json"
+        },
+        json={
+            "model": "claude-haiku-4-5-20251001",
+            "max_tokens": 1500,
+            "messages": [{"role": "user", "content": prompt}]
+        },
+        timeout=30
+    )
+    if resp.status_code != 200:
+        send(f"❌ Ошибка Claude при анализе ставок: {resp.status_code}")
+        return
+
+    analysis = resp.json()["content"][0]["text"]
+
+    # Парсим рекомендации Клода
+    kw_map = {kw["Keyword"]: kw for kw in keywords}
+    pending = {}
+    for line in analysis.strip().split("\n"):
+        parts = [p.strip() for p in line.split("|")]
+        if len(parts) < 2:
+            continue
+        kw_name = parts[0]
+        action  = parts[1].upper()
+        if kw_name not in kw_map:
+            continue
+        kw_obj = kw_map[kw_name]
+        if "ПОДНЯТЬ" in action or "СНИЗИТЬ" in action:
+            import re
+            nums = re.findall(r'\d+', action)
+            if nums:
+                new_bid = int(nums[0]) * 1_000_000
+                pending[kw_name] = {"id": kw_obj["Id"], "action": "bid", "bid": new_bid}
+        elif "ОТКЛЮЧИТЬ" in action:
+            pending[kw_name] = {"id": kw_obj["Id"], "action": "pause"}
+
+    global _pending_bids
+    _pending_bids = pending
+
+    msg = f"📊 Анализ ставок — {datetime.date.today().strftime('%d.%m.%Y')}\n\n{analysis}\n\n"
+    if pending:
+        msg += f"⚡️ Найдено {len(pending)} изменений.\nОтветьте *да* — применю всё, *нет* — пропущу."
+    else:
+        msg += "✅ Всё в норме, изменений нет."
+    send(msg)
+
+
+def apply_pending_bids():
+    """Применяет одобренные пользователем изменения ставок."""
+    global _pending_bids
+    if not _pending_bids:
+        send("ℹ️ Нет ожидающих изменений.")
+        return
+
+    bids_to_set = []
+    to_pause    = []
+    for kw_name, rec in _pending_bids.items():
+        if rec["action"] == "bid":
+            bids_to_set.append({"KeywordId": rec["id"], "SearchBid": rec["bid"]})
+        elif rec["action"] == "pause":
+            to_pause.append(rec["id"])
+
+    log = []
+    if bids_to_set:
+        direct("bids", {"method": "set", "params": {"Bids": bids_to_set}})
+        log.append(f"✅ Обновлено ставок: {len(bids_to_set)}")
+
+    if to_pause:
+        direct("keywords", {"method": "suspend", "params": {"Ids": to_pause}})
+        log.append(f"⏸ Отключено ключей: {len(to_pause)}")
+
+    _pending_bids = {}
+    send("✅ Изменения применены!\n" + "\n".join(log))
 
 
 def get_campaign_status():
@@ -951,6 +1114,7 @@ def cmd_help():
         "/vkpost — пост с фото в ВК (случайная модель)\n"
         "/vkarticle — статья с фактами о бренде в ВК\n"
         "/wordstat — расширить ключи через Вордстат\n"
+        "/bids — анализ ставок прямо сейчас\n"
         "/help — эта подсказка\n\n"
         f"📅 Расписание:\n"
         f"• Отчёт + оптимизация — каждый день {REPORT_HOUR:02d}:00\n"
@@ -964,6 +1128,7 @@ def cmd_help():
 
 def scheduler_loop():
     schedule.every().day.at(f"{REPORT_HOUR:02d}:00").do(cmd_optimize)
+    schedule.every().day.at("20:00").do(analyze_bids)
     schedule.every().day.at(f"{VK_POST_HOUR:02d}:00").do(vk_daily_post)
     schedule.every().monday.at("15:00").do(vk_article_post)
     schedule.every().wednesday.at("15:00").do(vk_article_post)
@@ -1026,6 +1191,13 @@ def main():
                     cmd_vkarticle()
                 elif text.startswith("/vkchannelid"):
                     cmd_vkchannelid()
+                elif text.startswith("/bids"):
+                    threading.Thread(target=analyze_bids).start()
+                elif text.lower() in ("да", "yes", "✅", "применить"):
+                    threading.Thread(target=apply_pending_bids).start()
+                elif text.lower() in ("нет", "no", "❌", "пропустить"):
+                    _pending_bids.clear()
+                    send("⏭ Пропущено. Изменения не применены.")
                 elif text.startswith("/wordstat"):
                     cmd_wordstat()
                 elif text.startswith("/help") or text.startswith("/start"):
