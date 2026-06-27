@@ -148,6 +148,160 @@ def apply_actions(actions):
     return log
 
 
+# ─── ВОРДСТАТ (через Директ API) ───
+
+def wordstat_get_suggestions(keywords):
+    """Получаем похожие запросы и частотность через Директ API."""
+    body = {
+        "method": "get",
+        "params": {
+            "Keywords": keywords[:10],
+            "Language": "RU"
+        }
+    }
+    r = requests.post(
+        "https://api.direct.yandex.com/json/v5/keywordsresearch",
+        headers=DIRECT_HEADERS,
+        data=json.dumps(body, ensure_ascii=False).encode("utf-8")
+    )
+    return r.json()
+
+
+def wordstat_weekly():
+    """Еженедельный анализ ключевых слов через Вордстат."""
+    print(f"[{datetime.datetime.now():%H:%M}] Вордстат анализ...")
+    send("🔍 Запускаю еженедельный анализ Вордстат...")
+
+    try:
+        # Получаем текущие ключи
+        current_kw = get_keywords()
+        current_list = [k["Keyword"] for k in current_kw]
+
+        # Базовые seed-запросы для расширения семантики
+        seeds = [
+            "купить кроссовки Prada",
+            "кроссовки Armani мужские",
+            "кроссовки BOSS оригинал",
+            "Brunello Cucinelli кроссовки",
+            "Hide Jack кроссовки",
+            "премиум кроссовки купить",
+            "дизайнерские кроссовки",
+            "люкс кроссовки",
+        ]
+
+        # Запрашиваем предложения
+        result = wordstat_get_suggestions(seeds)
+        suggestions = []
+
+        if "result" in result:
+            for item in result.get("result", {}).get("KeywordsResearch", []):
+                for kw_data in item.get("Keywords", []):
+                    kw = kw_data.get("Keyword", "")
+                    freq = kw_data.get("Frequency", 0)
+                    if freq > 50 and kw.lower() not in [c.lower() for c in current_list]:
+                        suggestions.append({"keyword": kw, "freq": freq})
+
+            suggestions.sort(key=lambda x: x["freq"], reverse=True)
+        else:
+            # Если API не поддерживает — используем Claude для генерации
+            suggestions = []
+
+        # Отправляем данные в Claude для анализа
+        current_str = "\n".join(f"- {k}" for k in current_list[:30])
+        suggest_str = "\n".join(f"- {s['keyword']} (частота: {s['freq']})" for s in suggestions[:20]) if suggestions else "нет данных от API"
+
+        prompt = f"""Ты SEO-аналитик магазина KickLuxe (премиум кроссовки: Prada, Armani, BOSS, Brunello Cucinelli, Hide & Jack).
+
+Текущие ключевые слова в кампании:
+{current_str}
+
+Данные Яндекс Вордстат (похожие запросы):
+{suggest_str}
+
+Задача: расширь семантическое ядро для кампании.
+
+Ответ в формате (строго):
+АНАЛИЗ:
+[3-4 предложения что работает и что упускаем]
+
+ДОБАВИТЬ (15-20 новых ключей, которых ещё нет в кампании):
+- ключевое слово 1
+- ключевое слово 2
+...
+
+МИНУС-СЛОВА (10-15 слов для исключения нецелевого трафика):
+- слово1
+- слово2
+..."""
+
+        r = requests.post(
+            "https://api.anthropic.com/v1/messages",
+            headers={"x-api-key": CLAUDE_API_KEY, "anthropic-version": "2023-06-01", "content-type": "application/json"},
+            json={"model": "claude-haiku-4-5-20251001", "max_tokens": 1500,
+                  "messages": [{"role": "user", "content": prompt}]}
+        )
+
+        if r.status_code != 200:
+            send(f"⚠️ Ошибка Claude: {r.status_code}")
+            return
+
+        text = r.json()["content"][0]["text"]
+
+        # Парсим ответ
+        new_keywords = []
+        minus_words = []
+        in_add = False
+        in_minus = False
+
+        for line in text.split("\n"):
+            line = line.strip()
+            if "ДОБАВИТЬ" in line:
+                in_add = True
+                in_minus = False
+            elif "МИНУС" in line:
+                in_add = False
+                in_minus = True
+            elif line.startswith("- ") and in_add:
+                new_keywords.append(line[2:].strip())
+            elif line.startswith("- ") and in_minus:
+                minus_words.append(line[2:].strip())
+
+        # Применяем изменения
+        applied = []
+        groups = get_adgroups()
+        existing_kw = {k["Keyword"].lower() for k in current_kw}
+
+        if new_keywords and groups:
+            gid = groups[0]["Id"]
+            to_add = [kw for kw in new_keywords if kw.lower() not in existing_kw][:20]
+            if to_add:
+                res = direct("keywords", {"method": "add", "params": {
+                    "Keywords": [{"Keyword": kw, "AdGroupId": gid} for kw in to_add]
+                }})
+                added = sum(1 for r in res.get("result", {}).get("AddResults", []) if "Id" in r)
+                applied.append(f"✅ Добавлено ключей: {added}")
+
+        if minus_words and groups:
+            updates = [{"Id": g["Id"], "NegativeKeywords": minus_words} for g in groups]
+            direct("adgroups", {"method": "update", "params": {"AdGroups": updates}})
+            applied.append(f"🚫 Минус-слова обновлены: {len(minus_words)} шт.")
+
+        # Отправляем отчёт
+        report_text = text.split("ДОБАВИТЬ")[0].replace("АНАЛИЗ:", "").strip()
+        msg = (
+            f"📊 Еженедельный Вордстат-анализ\n\n"
+            f"{report_text}\n\n"
+            f"{'Применено:' if applied else 'Изменений нет.'}\n"
+            + "\n".join(applied)
+        )
+        send(msg)
+        print("Вордстат анализ завершён")
+
+    except Exception as e:
+        print(f"Вордстат ошибка: {e}")
+        send(f"⚠️ Вордстат ошибка: {e}")
+
+
 # ─── CLAUDE ───
 
 def ask_claude(prompt):
@@ -416,6 +570,11 @@ def cmd_vkpost():
     vk_daily_post()
 
 
+def cmd_wordstat():
+    send("📈 Запускаю Вордстат анализ — займёт 30-60 секунд...")
+    threading.Thread(target=wordstat_weekly).start()
+
+
 def cmd_help():
     send(
         "🤖 KickLuxe Bot\n\n"
@@ -432,8 +591,9 @@ def cmd_help():
 # ─── ПЛАНИРОВЩИК ───
 
 def scheduler_loop():
-    schedule.every().day.at(f"{REPORT_HOUR:02d}:00").do(lambda: cmd_report())
+    schedule.every().day.at(f"{REPORT_HOUR:02d}:00").do(cmd_optimize)
     schedule.every().day.at(f"{VK_POST_HOUR:02d}:00").do(vk_daily_post)
+    schedule.every().sunday.at("10:00").do(wordstat_weekly)
     while True:
         schedule.run_pending()
         time.sleep(60)
@@ -455,7 +615,8 @@ def main():
         "/optimize — применить рекомендации ИИ\n"
         "/status — статус кампании\n"
         "/vkpost — пост в ВК сейчас\n"
-        f"\nОтчёт в {REPORT_HOUR:02d}:00. Пост в ВК в {VK_POST_HOUR:02d}:00."
+        "/wordstat — расширить ключи через Вордстат\n"
+        f"\nОтчёт в {REPORT_HOUR:02d}:00. Пост в ВК в {VK_POST_HOUR:02d}:00. Вордстат по воскресеньям в 10:00."
     )
     print(f"Отправка приветствия: {r}")
 
@@ -485,6 +646,8 @@ def main():
                     threading.Thread(target=cmd_status).start()
                 elif text.startswith("/vkpost"):
                     threading.Thread(target=cmd_vkpost).start()
+                elif text.startswith("/wordstat"):
+                    cmd_wordstat()
                 elif text.startswith("/help") or text.startswith("/start"):
                     cmd_help()
         except Exception as e:
@@ -494,4 +657,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-
