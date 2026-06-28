@@ -714,17 +714,28 @@ def cmd_optimize():
 
 
 def get_direct_stats():
-    """Статистика кампании из Директа за сегодня."""
+    """Статистика всех кампаний из Директа за сегодня."""
     today = datetime.date.today().isoformat()
+
+    # Получаем все кампании
+    all_camps = direct("campaigns", {"method": "get", "params": {
+        "SelectionCriteria": {},
+        "FieldNames": ["Id", "Name"]
+    }}).get("result", {}).get("Campaigns", [])
+    all_ids = [str(c["Id"]) for c in all_camps]
+
+    if not all_ids:
+        all_ids = [str(CAMPAIGN_ID)]
+
     res = direct("reports", {
         "method": "get",
         "params": {
             "SelectionCriteria": {
                 "DateFrom": today,
                 "DateTo": today,
-                "Filter": [{"Field": "CampaignId", "Operator": "IN", "Values": [str(CAMPAIGN_ID)]}]
+                "Filter": [{"Field": "CampaignId", "Operator": "IN", "Values": all_ids}]
             },
-            "FieldNames": ["Impressions", "Clicks", "Ctr", "Cost"],
+            "FieldNames": ["CampaignName", "Impressions", "Clicks", "Ctr", "Cost"],
             "ReportType": "CAMPAIGN_PERFORMANCE_REPORT",
             "DateRangeType": "CUSTOM_DATE",
             "Format": "TSV",
@@ -732,19 +743,27 @@ def get_direct_stats():
             "IncludeDiscount": "NO"
         }
     })
+
+    total = {"impressions": 0, "clicks": 0, "cost": 0.0, "per_camp": []}
     try:
         lines = res.strip().split("\n")
-        if len(lines) >= 3:
-            data = lines[2].split("\t")
-            return {
-                "impressions": int(data[0]) if data[0] != "--" else 0,
-                "clicks": int(data[1]) if data[1] != "--" else 0,
-                "ctr": float(data[2]) if data[2] != "--" else 0.0,
-                "cost": round(float(data[3]) / 1000000, 2) if data[3] != "--" else 0.0
-            }
-    except Exception:
-        pass
-    return {"impressions": 0, "clicks": 0, "ctr": 0.0, "cost": 0.0}
+        for line in lines[2:]:
+            parts = line.split("\t")
+            if len(parts) < 5:
+                continue
+            name  = parts[0]
+            impr  = int(parts[1])   if parts[1] != "--" else 0
+            clicks= int(parts[2])   if parts[2] != "--" else 0
+            cost  = round(float(parts[4]) / 1_000_000, 2) if parts[4] != "--" else 0.0
+            total["impressions"] += impr
+            total["clicks"]      += clicks
+            total["cost"]        += cost
+            total["per_camp"].append({"name": name, "impressions": impr, "clicks": clicks, "cost": cost})
+    except Exception as e:
+        print(f"get_direct_stats error: {e}")
+
+    total["ctr"] = round(total["clicks"] / total["impressions"] * 100, 2) if total["impressions"] else 0.0
+    return total
 
 
 def cmd_status():
@@ -760,15 +779,25 @@ def cmd_status():
     }
     status = status_map.get(camp.get("Status", ""), "?") if camp else "не найдена"
 
+    # Разбивка по кампаниям
+    camps_block = ""
+    for c in d.get("per_camp", []):
+        icon = "✅" if c["impressions"] > 0 else "⚠️"
+        camps_block += (
+            f"\n{icon} {c['name']}\n"
+            f"   Показы: {c['impressions']} | Клики: {c['clicks']} | Расход: {c['cost']} ₽\n"
+        )
+
     send(
         f"📊 Статус KickLuxe — {datetime.date.today().strftime('%d.%m.%Y')}\n\n"
         f"🎯 Кампания: {status}\n"
         f"🔑 Ключевых слов: {len(kw)}\n\n"
-        f"📣 Директ сегодня:\n"
+        f"📣 Директ сегодня (все кампании):\n"
         f"• Показы: {d['impressions']}\n"
         f"• Клики: {d['clicks']}\n"
         f"• CTR: {d['ctr']}%\n"
-        f"• Расход: {d['cost']} ₽\n\n"
+        f"• Расход: {d['cost']} ₽\n"
+        f"{camps_block}\n"
         f"🌐 Метрика сегодня:\n"
         f"• Визиты: {m['visits']}\n"
         f"• Отказы: {m['bounce']}%\n"
